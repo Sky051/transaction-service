@@ -64,4 +64,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/<sky051>/transaction-service:latest
+          tags: ghcr.io/sky051/transaction-service:latest
