@@ -12,6 +12,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: transaction_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d transaction_db"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -25,3 +40,8 @@ jobs:
 
       - name: Build with Maven
         run: ./mvnw clean verify
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/transaction_db
+          SPRING_DATASOURCE_USERNAME: postgres
+          SPRING_DATASOURCE_PASSWORD: postgres
+          SPRING_JPA_HIBERNATE_DDL_AUTO: create-drop
