@@ -68,4 +68,7 @@ jobs:
 
       - name: Deploy to Render
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: curl -X POST "$${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          curl --fail-with-body -sS -X POST "$RENDER_DEPLOY_HOOK_URL"
