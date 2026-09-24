@@ -65,3 +65,7 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/sky051/transaction-service:latest
+
+      - name: Deploy to Render
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: curl -X POST "${ https://api.render.com/deploy/srv-daqfantg1s2s73893g8g?key=nVZ5_lkunzI }"
