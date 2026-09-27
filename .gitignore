@@ -1,24 +1,7 @@
-# Maven
 target/
-!.mvn/wrapper/maven-wrapper.jar
-
-# IntelliJ
 .idea/
 *.iml
-*.iws
-*.ipr
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# Environment / secrets
+logs/
 .env
-.env.*
-
-# Spring
 application-local.properties
 application-prod.properties

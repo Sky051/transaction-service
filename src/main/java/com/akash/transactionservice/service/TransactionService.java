@@ -1,35 +1,30 @@
 package com.akash.transactionservice.service;
 
+import com.akash.transactionservice.client.AccountServiceClient;
 import com.akash.transactionservice.dto.TransactionResponse;
 import com.akash.transactionservice.dto.TransferRequest;
-import com.akash.transactionservice.entity.Account;
 import com.akash.transactionservice.entity.Transaction;
 import com.akash.transactionservice.entity.TransactionStatus;
-import com.akash.transactionservice.repository.AccountRepository;
+import com.akash.transactionservice.exception.InvalidTransferException;
 import com.akash.transactionservice.repository.TransactionRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
-import com.akash.transactionservice.exception.AccountNotFoundException;
-import com.akash.transactionservice.exception.InsufficientBalanceException;
-
-import com.akash.transactionservice.exception.InvalidTransferException;
-
-import java.util.UUID;
 
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class TransactionService {
 
     private final TransactionRepository transactionRepository;
-    private final AccountRepository accountRepository;
+    private final AccountServiceClient accountServiceClient;
 
     public TransactionService(
             TransactionRepository transactionRepository,
-            AccountRepository accountRepository) {
+            AccountServiceClient accountServiceClient) {
 
         this.transactionRepository = transactionRepository;
-        this.accountRepository = accountRepository;
+        this.accountServiceClient = accountServiceClient;
     }
 
     @Transactional
@@ -45,94 +40,89 @@ public class TransactionService {
 
             Transaction transaction = existingTransaction.get();
 
-            return TransactionResponse.builder()
-                    .transactionId(transaction.getId())
-                    .senderAccountId(transaction.getSenderAccountId())
-                    .receiverAccountId(transaction.getReceiverAccountId())
-                    .amount(transaction.getAmount())
-                    .status(transaction.getStatus())
-                    .createdAt(transaction.getCreatedAt())
-                    .build();
+            return mapToResponse(transaction);
         }
 
         // 2. Get sender and receiver IDs
         UUID senderId = request.getSenderAccountId();
         UUID receiverId = request.getReceiverAccountId();
 
-// 3. Sender and receiver cannot be the same
+        // 3. Sender and receiver cannot be the same
         if (senderId.equals(receiverId)) {
             throw new InvalidTransferException(
                     "Sender and receiver accounts must be different"
             );
         }
 
-// 4. Determine a consistent locking order
-        UUID firstId;
-        UUID secondId;
-
-        if (senderId.compareTo(receiverId) < 0) {
-            firstId = senderId;
-            secondId = receiverId;
-        } else {
-            firstId = receiverId;
-            secondId = senderId;
-        }
-
-// 5. Lock the accounts in deterministic order
-        Account firstAccount = accountRepository
-                .findById(firstId)
-                .orElseThrow(() ->
-                        new AccountNotFoundException(
-                                "Account not found: " + firstId
-                        ));
-
-        Account secondAccount = accountRepository
-                .findById(secondId)
-                .orElseThrow(() ->
-                        new AccountNotFoundException(
-                                "Account not found: " + secondId
-                        ));
-
-// 6. Identify which account is sender and receiver
-        Account sender;
-        Account receiver;
-
-        if (senderId.equals(firstAccount.getId())) {
-            sender = firstAccount;
-            receiver = secondAccount;
-        } else {
-            sender = secondAccount;
-            receiver = firstAccount;
-        }
-
-        // 4. Check balance
-        if (sender.getBalance().compareTo(request.getAmount()) < 0) {
-            throw new InsufficientBalanceException("Insufficient balance");
-        }
-
-        // 5. Debit sender
-        sender.setBalance(
-                sender.getBalance().subtract(request.getAmount())
-        );
-
-        // 6. Credit receiver
-        receiver.setBalance(
-                receiver.getBalance().add(request.getAmount())
-        );
-
-        // 7. Create transaction
+        // 4. Create transaction with PENDING status
         Transaction transaction = Transaction.builder()
-                .senderAccountId(sender.getId())
-                .receiverAccountId(receiver.getId())
+                .senderAccountId(senderId)
+                .receiverAccountId(receiverId)
                 .amount(request.getAmount())
-                .status(TransactionStatus.SUCCESS)
+                .status(TransactionStatus.PENDING)
                 .idempotencyKey(idempotencyKey)
                 .build();
 
-        // 8. Save transaction
-        transactionRepository.save(transaction);
+        transaction = transactionRepository.save(transaction);
 
-        // 9. Return response
+        UUID transactionId = transaction.getId();
+
+        // 5. Debit sender account
+        accountServiceClient.debit(
+                senderId,
+                request.getAmount(),
+                transactionId
+        );
+
+        // 6. Credit receiver account
+        try {
+
+            accountServiceClient.credit(
+                    receiverId,
+                    request.getAmount(),
+                    transactionId
+            );
+
+            // Receiver successfully credited
+            transaction.setStatus(TransactionStatus.SUCCESS);
+
+        } catch (Exception creditException) {
+
+            // Receiver credit failed.
+            // Compensate the sender's debit.
+
+            UUID compensationOperationId = UUID.randomUUID();
+
+            try {
+
+                accountServiceClient.credit(
+                        senderId,
+                        request.getAmount(),
+                        compensationOperationId
+                );
+
+                // Sender successfully received the money back
+                transaction.setStatus(TransactionStatus.FAILED);
+
+            } catch (Exception compensationException) {
+
+                // Compensation also failed.
+                // Money may still be missing.
+                transaction.setStatus(
+                        TransactionStatus.COMPENSATION_FAILED
+                );
+            }
+        }
+
+        // 7. Save final transaction status
+        transaction = transactionRepository.save(transaction);
+
+        // 8. Return response
+        return mapToResponse(transaction);
+    }
+
+    private TransactionResponse mapToResponse(Transaction transaction) {
+
         return TransactionResponse.builder()
                 .transactionId(transaction.getId())
                 .senderAccountId(transaction.getSenderAccountId())
